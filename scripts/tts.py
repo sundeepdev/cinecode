@@ -225,8 +225,12 @@ def install_offline(engine):
     import shutil
     eng = OFFLINE[engine]
     py = next((p for p in (shutil.which(f"python3.{v}") for v in eng["pythons"]) if p), None)
+    if py:
+        # Resolve symlinked interpreters (notably uv's Python shims). Some Python
+        # distributions need the real executable to build a working venv.
+        py = os.path.realpath(py)
     if not py and sys.version_info[:2] in [(3, v) for v in eng["pythons"]]:
-        py = sys.executable
+        py = os.path.realpath(sys.executable)
     if not py:
         wanted = " or ".join(f"3.{v}" for v in sorted(eng["pythons"])[:1] + sorted(eng["pythons"])[-1:])
         sys.exit(f"{eng['label']} needs Python {wanted} (between them): install one (macOS: brew install python@3.12; "
