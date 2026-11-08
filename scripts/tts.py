@@ -194,6 +194,12 @@ OFFLINE = {
 EMA_PY = OFFLINE["ema"]["python"]
 
 
+def _child_env():
+    """macOS framework Pythons (the system python3) set __PYVENV_LAUNCHER__, which makes any other Python started from
+    here fail at startup; the offline engines run under their own interpreter, so drop it."""
+    return {k: v for k, v in os.environ.items() if k != "__PYVENV_LAUNCHER__"}
+
+
 def offline_missing(engine):
     return None if os.path.exists(OFFLINE[engine]["python"]) else OFFLINE[engine]["missing"]
 
@@ -209,7 +215,7 @@ def offline_takes(engine, items, voice, seed, speed):
         raise RuntimeError(f"Kokoro voice {voice}: Japanese and Mandarin voices are not supported by this install")
     raw = [(text, voice, dst + f".{engine}.wav") for text, dst in items]
     p = subprocess.run([eng["python"], "-c", eng["run"]], input=json.dumps({"items": raw, "seed": seed, "speed": speed}),
-                       text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                       text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_child_env())
     if p.returncode != 0:
         raise RuntimeError(f"{eng['label']} failed: " + p.stderr.strip()[-300:])
     out = []
@@ -240,9 +246,9 @@ def install_offline(engine):
                  f"Linux: your package manager or uv python install 3.12; Windows: winget install Python.Python.3.12), "
                  f"then run this again")
     venv = os.path.dirname(os.path.dirname(eng["python"]))
-    subprocess.run([py, "-m", "venv", venv], check=True)
+    subprocess.run([py, "-m", "venv", venv], check=True, env=_child_env())
     subprocess.run([eng["python"], "-m", "pip", "install", "-q", "--disable-pip-version-check"] + eng["packages"],
-                   check=True)
+                   check=True, env=_child_env())
     print(f"{eng['label']} installed in {venv} (remove that folder to uninstall); {eng['installed']}")
     return 0
 
