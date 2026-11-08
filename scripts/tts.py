@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Temp and final narration from the script, with Gemini TTS (default) or ElevenLabs (optional).
+"""Temp and final narration from the script, with Gemini TTS (default), ElevenLabs (optional) or a free offline
+voice (Kokoro, EMA Lightning) the user chose to install.
 Python 3 standard library + ffmpeg. The key is entered once for every film (tools/keys.py set GEMINI_API_KEY) and
 never printed; the environment or a film's own .env can override it.
 
@@ -24,6 +25,13 @@ Engines
   elevenlabs  ELEVENLABS_API_KEY · --voice <voice_id> from your voice library · model eleven_v3 (70+ languages,
               audio tags such as [excited], [laughs], [whispers]) or eleven_multilingual_v2 (steady multilingual
               narration, no tags)
+  kokoro      Kokoro-82M (hexgrad, Apache 2.0): free and offline on a CPU, no key; many voices, no style, --speed.
+              The voice name sets the language by its first letter: a American English (af_heart, am_michael,
+              am_fenrir), b British English (bf_emma, bm_george, bm_fable), h Hindi (hf_alpha, hm_omega), e Spanish,
+              f French, i Italian, p Portuguese (these need espeak-ng on the system). Japanese and Mandarin
+              voices are not supported by this install.
+              Only for a user who chose to install it (about 1 GB with PyTorch, a 330 MB model on first use):
+              tts.py --install kokoro.
   ema         EMA Lightning (Canberk Aslan, Apache 2.0): free and offline Turkish, no key; one voice, no style, --speed.
               Only for a user who chose to install it (about 800 MB): tts.py --install ema. Turkish only.
 """
@@ -132,59 +140,129 @@ def to_wav(data, dst):
     return float(d or 0)
 
 
-EMA_PY = os.environ.get("CINECODE_EMA_PYTHON") or os.path.expanduser(
-    "~/.cinecode/tts-ema/Scripts/python.exe" if os.name == "nt" else "~/.cinecode/tts-ema/bin/python")
+def _venv_python(name):
+    return os.path.expanduser(f"~/.cinecode/tts-{name}/Scripts/python.exe" if os.name == "nt"
+                              else f"~/.cinecode/tts-{name}/bin/python")
+
+
 EMA_RUN = """import json, sys
 from ema_lightning import EMA
 job = json.load(sys.stdin)
 tts = EMA()
-for text, dst in job["items"]:
+for text, voice, dst in job["items"]:
     tts.say(text, path=dst, seed=job["seed"], speed=job["speed"])
 """
 
+KOKORO_RUN = """import json, sys
+import numpy as np, soundfile as sf
+from kokoro import KPipeline
+job = json.load(sys.stdin)
+pipes = {}
+for text, voice, dst in job["items"]:
+    lang = voice[0]
+    if lang not in pipes:
+        pipes[lang] = KPipeline(lang_code=lang, repo_id="hexgrad/Kokoro-82M")
+    parts = []
+    for r in pipes[lang](text, voice=voice, speed=job["speed"]):
+        audio = getattr(r, "audio", None) if not isinstance(r, tuple) else r[2]
+        if audio is not None:
+            parts.append(audio.numpy() if hasattr(audio, "numpy") else np.asarray(audio))
+    if not parts:
+        sys.exit("no audio for: " + text[:60])
+    sf.write(dst, np.concatenate(parts), 24000)
+"""
+
+# Free voices that run on the user's own computer, each in a virtual environment of its own in ~/.cinecode/tts-<name>
+# (PyTorch needs a newer Python than macOS ships). Installed only when the user picked one.
+OFFLINE = {
+    "ema": {"label": "EMA Lightning", "model": "ema-lightning", "default_voice": "tr", "pythons": range(14, 9, -1),
+            "python": os.environ.get("CINECODE_EMA_PYTHON") or _venv_python("ema"), "run": EMA_RUN,
+            "packages": ["ema-lightning"],
+            "missing": "EMA Lightning (free, offline Turkish voice) is not installed: about 800 MB (PyTorch and a 34 MB "
+                       "model), only if the user wants it: python3 tools/tts.py --install ema; otherwise Gemini, "
+                       "Kokoro or the OS voice",
+            "installed": "the model (34 MB) comes on first use"},
+    "kokoro": {"label": "Kokoro", "model": "kokoro-82m", "default_voice": "af_heart", "pythons": (12, 11, 10),
+               "python": os.environ.get("CINECODE_KOKORO_PYTHON") or _venv_python("kokoro"), "run": KOKORO_RUN,
+               "packages": ["kokoro>=0.9.4", "soundfile", "numpy"],
+               "missing": "Kokoro (free, offline voices in English, Hindi and four more languages) is not installed: "
+                          "about 1 GB (PyTorch and a 330 MB model), only if the user wants it: "
+                          "python3 tools/tts.py --install kokoro; otherwise Gemini or the OS voice",
+               "installed": "the model (about 330 MB) comes from Hugging Face on first use; Spanish, French, Hindi, "
+                            "Italian and Portuguese voices also need espeak-ng (brew / apt / winget install espeak-ng)"},
+}
+EMA_PY = OFFLINE["ema"]["python"]
+
+
+def _child_env():
+    """macOS framework Pythons (the system python3) set __PYVENV_LAUNCHER__, which makes any other Python started from
+    here fail at startup; the offline engines run under their own interpreter, so drop it."""
+    return {k: v for k, v in os.environ.items() if k != "__PYVENV_LAUNCHER__"}
+
+
+def offline_missing(engine):
+    return None if os.path.exists(OFFLINE[engine]["python"]) else OFFLINE[engine]["missing"]
+
 
 def ema_missing():
-    return None if os.path.exists(EMA_PY) else (
-        "EMA Lightning (free, offline Turkish voice) is not installed: about 800 MB (PyTorch and a 34 MB model), only "
-        "if the user wants it: python3 tools/tts.py --install ema; otherwise Gemini or the OS voice")
+    return offline_missing("ema")
 
 
-def ema_takes(items, seed, speed):
+def offline_takes(engine, items, voice, seed, speed):
     """[(text, dst)] in one run of the model (it loads once); each take converted to 48 kHz 24-bit like the others."""
-    raw = [(text, dst + ".ema.wav") for text, dst in items]
-    p = subprocess.run([EMA_PY, "-c", EMA_RUN], input=json.dumps({"items": raw, "seed": seed, "speed": speed}),
-                       text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    eng = OFFLINE[engine]
+    if engine == "kokoro" and voice[:1] in ("j", "z"):
+        raise RuntimeError(f"Kokoro voice {voice}: Japanese and Mandarin voices are not supported by this install")
+    raw = [(text, voice, dst + f".{engine}.wav") for text, dst in items]
+    p = subprocess.run([eng["python"], "-c", eng["run"]], input=json.dumps({"items": raw, "seed": seed, "speed": speed}),
+                       text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=_child_env())
     if p.returncode != 0:
-        raise RuntimeError("EMA Lightning failed: " + p.stderr.strip()[-300:])
+        raise RuntimeError(f"{eng['label']} failed: " + p.stderr.strip()[-300:])
     out = []
-    for (_, src), (_, dst) in zip(raw, items):
+    for (_, _, src), (_, dst) in zip(raw, items):
         with open(src, "rb") as f:
             out.append(to_wav(f.read(), dst))
         os.remove(src)
     return out
 
 
-def install_ema():
-    """A virtual environment of its own in ~/.cinecode/tts-ema: PyTorch needs Python 3.10 or newer, macOS ships 3.9."""
+def ema_takes(items, seed, speed):
+    return offline_takes("ema", items, "tr", seed, speed)
+
+
+def install_offline(engine):
     import shutil
-    py = next((p for p in (shutil.which(f"python3.{v}") for v in range(14, 9, -1)) if p), None)
-    if not py and sys.version_info >= (3, 10):
-        py = sys.executable
+    eng = OFFLINE[engine]
+    py = next((p for p in (shutil.which(f"python3.{v}") for v in eng["pythons"]) if p), None)
+    if py:
+        # Resolve symlinked interpreters (notably uv's Python shims). Some Python
+        # distributions need the real executable to build a working venv.
+        py = os.path.realpath(py)
+    if not py and sys.version_info[:2] in [(3, v) for v in eng["pythons"]]:
+        py = os.path.realpath(sys.executable)
     if not py:
-        sys.exit("EMA Lightning needs Python 3.10 or newer: brew install python (macOS), then run this again")
-    venv = os.path.dirname(os.path.dirname(EMA_PY))
-    subprocess.run([py, "-m", "venv", venv], check=True)
-    subprocess.run([EMA_PY, "-m", "pip", "install", "-q", "--disable-pip-version-check", "ema-lightning"], check=True)
-    print(f"EMA Lightning installed in {venv} (remove that folder to uninstall); the model (34 MB) comes on first use")
+        wanted = " or ".join(f"3.{v}" for v in sorted(eng["pythons"])[:1] + sorted(eng["pythons"])[-1:])
+        sys.exit(f"{eng['label']} needs Python {wanted} (between them): install one (macOS: brew install python@3.12; "
+                 f"Linux: your package manager or uv python install 3.12; Windows: winget install Python.Python.3.12), "
+                 f"then run this again")
+    venv = os.path.dirname(os.path.dirname(eng["python"]))
+    subprocess.run([py, "-m", "venv", venv], check=True, env=_child_env())
+    subprocess.run([eng["python"], "-m", "pip", "install", "-q", "--disable-pip-version-check"] + eng["packages"],
+                   check=True, env=_child_env())
+    print(f"{eng['label']} installed in {venv} (remove that folder to uninstall); {eng['installed']}")
     return 0
+
+
+def install_ema():
+    return install_offline("ema")
 
 
 def synth(engine, model, voice, text, style, a, dst):
     """One take to dst (48 kHz WAV); returns its length in seconds."""
-    if engine == "ema":
-        if ema_missing():
-            raise RuntimeError(ema_missing())
-        return ema_takes([(text, dst)], a.seed, a.speed)[0]
+    if engine in OFFLINE:
+        if offline_missing(engine):
+            raise RuntimeError(offline_missing(engine))
+        return offline_takes(engine, [(text, dst)], voice, a.seed, a.speed)[0]
     if engine == "gemini":
         key = keys.get("GEMINI_API_KEY")
         body, url = gemini_request(text, style, voice, model), GEMINI_URL
@@ -217,11 +295,11 @@ def audition(a):
     made, cands = [], [c.strip() for c in a.audition.split(",") if c.strip()]
     for n, cand in enumerate(cands, 1):
         engine, _, voice = cand.partition(":")
-        voice = voice or ("tr" if engine == "ema" else "")
-        if engine not in ("gemini", "elevenlabs", "ema") or not voice:
-            print(f"{n}. skipped '{cand}': write engine:voice (gemini:Kore, elevenlabs:<voice_id>, ema)")
+        voice = voice or (OFFLINE[engine]["default_voice"] if engine in OFFLINE else "")
+        if engine not in ("gemini", "elevenlabs", *OFFLINE) or not voice:
+            print(f"{n}. skipped '{cand}': write engine:voice (gemini:Kore, elevenlabs:<voice_id>, kokoro:af_heart, ema)")
             continue
-        model = "ema-lightning" if engine == "ema" else a.model if a.model and (a.model.startswith("gemini") == (engine == "gemini")) else \
+        model = OFFLINE[engine]["model"] if engine in OFFLINE else a.model if a.model and (a.model.startswith("gemini") == (engine == "gemini")) else \
             ("gemini-3.8-flash-tts" if engine == "gemini" else "eleven_v3")
         name = "".join(ch if ch.isalnum() or ch in "-_" else "-" for ch in voice)[:24]
         dst = os.path.join(a.out, f"{n}-{engine}-{name}.wav")
@@ -246,17 +324,19 @@ def audition(a):
     return 1
 
 
-def ema_lines(a, lines):
-    """The whole narration with EMA Lightning in one run. One voice, no style: the film's treatment shapes it."""
+def offline_lines(a, lines):
+    """The whole narration with an offline voice in one run. No style: the film's treatment shapes it."""
+    eng = OFFLINE[a.engine]
+    voice = a.voice or eng["default_voice"]
     if a.dry_run:
         for ln in lines:
-            print(f"{ln['id']}: ema-lightning (offline) seed={a.seed} speed={a.speed}: {ln['text'][:80]}")
+            print(f"{ln['id']}: {eng['model']} (offline) voice={voice} seed={a.seed} speed={a.speed}: {ln['text'][:80]}")
         return 0
-    if ema_missing():
-        sys.exit(ema_missing())
+    if offline_missing(a.engine):
+        sys.exit(offline_missing(a.engine))
     os.makedirs(a.out, exist_ok=True)
     items = [(ln["text"], os.path.join(a.out, f".{ln['id']}.new.wav")) for ln in lines]
-    durs = ema_takes(items, a.seed, a.speed)
+    durs = offline_takes(a.engine, items, voice, a.seed, a.speed)
     log_path, log = os.path.join(a.out, "tts-log.json"), []
     if os.path.exists(log_path):
         with open(log_path, encoding="utf-8") as source:
@@ -264,26 +344,28 @@ def ema_lines(a, lines):
     for ln, (_, tmp), dur in zip(lines, items, durs):
         dst = os.path.join(a.out, f"{ln['id']}.wav")
         os.replace(tmp, dst)
-        log.append({"id": ln["id"], "engine": "ema", "model": "ema-lightning", "voice": "tr", "style": "",
+        log.append({"id": ln["id"], "engine": a.engine, "model": eng["model"], "voice": voice, "style": "",
                     "chars": len(ln["text"]), "seconds": round(dur, 2), "file": dst})
         print(f"{ln['id']}: {dst}  {dur:.2f} s  ({len(ln['text'])} chars)")
     with open(log_path, "w", encoding="utf-8") as destination:
         json.dump(log, destination, indent=1, ensure_ascii=False)
-    print(f"total {sum(durs):.1f} s of narration · log {log_path} · EMA Lightning has one voice and no style: "
+    print(f"total {sum(durs):.1f} s of narration · log {log_path} · {eng['label']} takes no style: "
           f"voice_treat.py gives it the film's own voice next")
     return 0
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("--engine", choices=["gemini", "elevenlabs", "ema"], default=os.environ.get("TTS_ENGINE", "gemini"))
-    ap.add_argument("--install", choices=["ema"], help="ema: install EMA Lightning (about 800 MB, once; ask the user first)")
-    ap.add_argument("--speed", type=float, default=1.0, help="ema: 0.25 to 4")
+    ap.add_argument("--engine", choices=["gemini", "elevenlabs", *OFFLINE], default=os.environ.get("TTS_ENGINE", "gemini"))
+    ap.add_argument("--install", choices=list(OFFLINE), help="kokoro: install Kokoro (about 1 GB) · ema: install EMA "
+                                                             "Lightning (about 800 MB); once, ask the user first")
+    ap.add_argument("--speed", type=float, default=1.0, help="kokoro, ema: 0.5 to 2 (ema up to 4)")
     ap.add_argument("--lines", help="vo-lines.json")
     ap.add_argument("--text", help="one line instead of --lines")
     ap.add_argument("--id", default="VO1")
     ap.add_argument("--out", help="the folder for the takes (needed for everything but --install)")
-    ap.add_argument("--voice", help="gemini: voice name (default Charon); elevenlabs: voice_id (required)")
+    ap.add_argument("--voice", help="gemini: voice name (default Charon); elevenlabs: voice_id (required); "
+                                         "kokoro: af_heart (default), am_michael, bm_george, hf_alpha, …")
     ap.add_argument("--model", help="gemini-3.8-flash-tts | gemini-3.8-flash-lite-tts | eleven_v3 | eleven_multilingual_v2")
     ap.add_argument("--style", default="", help='delivery from the sound identity (default: none)')
     ap.add_argument("--seed", type=int, default=7, help="elevenlabs: best-effort repeatable takes")
@@ -295,7 +377,7 @@ def main():
                                        '(one line of the script): one short file per candidate in --out, never joined')
     a = ap.parse_args()
     if a.install:
-        return install_ema()
+        return install_offline(a.install)
     if not a.out:
         ap.error("the following arguments are required: --out")
     if a.audition:
@@ -316,8 +398,8 @@ def main():
         keep = set(a.only.split(","))
         lines = [l for l in lines if l["id"] in keep]
 
-    if a.engine == "ema":
-        return ema_lines(a, lines)
+    if a.engine in OFFLINE:
+        return offline_lines(a, lines)
     if a.engine == "gemini":
         key_name, model, voice = "GEMINI_API_KEY", a.model or "gemini-3.8-flash-tts", a.voice or "Charon"
     else:
@@ -378,7 +460,8 @@ def main():
         if spent:
             sys.exit(f"QUOTA SPENT at {spent}: the {a.engine} key's daily quota is used up; {len(failed)} line(s) wait: "
                      f"{', '.join(failed)}. Tell the user and offer: rerun tomorrow with --only {','.join(failed)} · fewer, "
-                     f"longer lines (one per beat group) · EMA Lightning, free and offline for Turkish (--engine ema) · "
+                     f"longer lines (one per beat group) · Kokoro, free and offline (--engine kokoro) · EMA Lightning, "
+                     f"free and offline for Turkish (--engine ema) · "
                      f"billing on the key. Meanwhile the OS voice stands in, said so")
         if failed:
             sys.exit(f"{len(failed)} line(s) failed: {', '.join(failed)} (fix and rerun with --only {','.join(failed)})")

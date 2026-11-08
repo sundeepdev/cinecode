@@ -156,6 +156,8 @@ Ayrıntılar: `references/purpose-cinematic.md`, `references/purpose-ad.md`, `re
 
 Biri eksik mi? Yine de başla: ajan önce bilgisayarı kontrol eder ve eksik olanı kurmayı önerir (bir şey kurmadan önce sorar). Başka hiçbir şey kurulmaz: betikler yalnızca yerleşik modülleri kullanır, three.js sabitlenmiş kütüphane sürümlerini CDN'den yükler.
 
+**Birçok dilde bedava, internetsiz sesler:** [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache 2.0): doğal İngilizce sesler (Amerikan ve İngiliz) ile Hintçe, İspanyolca, Fransızca, İtalyanca ve Portekizce; işlemcide çalışır, PyTorch ile yaklaşık 1 GB (Python 3.10–3.12; İspanyolca, Fransızca, Hintçe, İtalyanca ve Portekizce için espeak-ng de gerekir). Kurulduktan sonra kit kullanabilir: `python3 tools/tts.py --install kokoro`, ardından `--engine kokoro --voice af_heart` (seçmelik: `--audition "kokoro:af_heart,kokoro:am_michael,kokoro:bm_george"`).
+
 **İstersen bedava Türkçe sesler** (kit hiçbirini kurmaz; anlatım aksi halde senin anahtarınla Gemini TTS'ten, yoksa geçici olarak sistem sesinden gelir):
 - Canberk Aslan'ın [EMA Lightning](https://huggingface.co/canberkkkkkk/ema-lightning) modeli (Apache 2.0): tek, net bir ses, internetsiz ve işlemcide çalışır, PyTorch ile yaklaşık 800 MB. Kurulduktan sonra kit kullanabilir: `python3 tools/tts.py --install ema`, ardından `--engine ema`.
 - [VoxCPM2 Türkçe ses tasarımı](https://github.com/alexturkey/voxcpm2-turkce-ses-tasarimi) (Apache 2.0): sesi tarif ederek tasarlarsın, yedi hazır anlatıcı var (belgesel sesi, derin anlatıcı, haber spikeri); Apple Silicon ya da NVIDIA ekran kartı, yaklaşık 3,7 GB.

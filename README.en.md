@@ -156,6 +156,8 @@ Details: `references/purpose-cinematic.md`, `references/purpose-ad.md`, `referen
 
 Missing one of them? Just start: the agent checks the machine first and offers to install what is missing (it asks before installing anything). Nothing else is installed: the scripts use only built-ins, and three.js loads pinned library versions from a CDN.
 
+**Free offline voices in many languages:** [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache 2.0): natural English voices (American and British) plus Hindi, Spanish, French, Italian and Portuguese, on a CPU, about 1 GB with PyTorch (Python 3.10 to 3.12; Spanish, French, Hindi, Italian and Portuguese also need espeak-ng). The kit can use it once installed: `python3 tools/tts.py --install kokoro`, then `--engine kokoro --voice af_heart` (auditions: `--audition "kokoro:af_heart,kokoro:am_michael,kokoro:bm_george"`).
+
 **Free Turkish voices, if you want one** (the kit installs none of them; narration otherwise uses Gemini TTS with your key, or the system voice as a stand-in):
 - [EMA Lightning](https://huggingface.co/canberkkkkkk/ema-lightning) by Canberk Aslan (Apache 2.0): one clear voice, offline on a CPU, about 800 MB with PyTorch. The kit can use it once installed: `python3 tools/tts.py --install ema`, then `--engine ema`.
 - [VoxCPM2 Türkçe ses tasarımı](https://github.com/alexturkey/voxcpm2-turkce-ses-tasarimi) (Apache 2.0): design a voice from a description, seven ready narrators (a documentary voice, a deep storyteller, a news anchor); Apple Silicon or an NVIDIA card, about 3.7 GB.
