@@ -28,7 +28,8 @@ Engines
   kokoro      Kokoro-82M (hexgrad, Apache 2.0): free and offline on a CPU, no key; many voices, no style, --speed.
               The voice name sets the language by its first letter: a American English (af_heart, am_michael,
               am_fenrir), b British English (bf_emma, bm_george, bm_fable), h Hindi (hf_alpha, hm_omega), e Spanish,
-              f French, i Italian, p Portuguese (these need espeak-ng on the system), j Japanese, z Mandarin.
+              f French, i Italian, p Portuguese (these need espeak-ng on the system). Japanese and Mandarin
+              voices are not supported by this install.
               Only for a user who chose to install it (about 1 GB with PyTorch, a 330 MB model on first use):
               tts.py --install kokoro.
   ema         EMA Lightning (Canberk Aslan, Apache 2.0): free and offline Turkish, no key; one voice, no style, --speed.
@@ -184,7 +185,7 @@ OFFLINE = {
     "kokoro": {"label": "Kokoro", "model": "kokoro-82m", "default_voice": "af_heart", "pythons": (12, 11, 10),
                "python": os.environ.get("CINECODE_KOKORO_PYTHON") or _venv_python("kokoro"), "run": KOKORO_RUN,
                "packages": ["kokoro>=0.9.4", "soundfile", "numpy"],
-               "missing": "Kokoro (free, offline voices in English, Hindi and seven more languages) is not installed: "
+               "missing": "Kokoro (free, offline voices in English, Hindi and four more languages) is not installed: "
                           "about 1 GB (PyTorch and a 330 MB model), only if the user wants it: "
                           "python3 tools/tts.py --install kokoro; otherwise Gemini or the OS voice",
                "installed": "the model (about 330 MB) comes from Hugging Face on first use; Spanish, French, Hindi, "
@@ -204,6 +205,8 @@ def ema_missing():
 def offline_takes(engine, items, voice, seed, speed):
     """[(text, dst)] in one run of the model (it loads once); each take converted to 48 kHz 24-bit like the others."""
     eng = OFFLINE[engine]
+    if engine == "kokoro" and voice[:1] in ("j", "z"):
+        raise RuntimeError(f"Kokoro voice {voice}: Japanese and Mandarin voices are not supported by this install")
     raw = [(text, voice, dst + f".{engine}.wav") for text, dst in items]
     p = subprocess.run([eng["python"], "-c", eng["run"]], input=json.dumps({"items": raw, "seed": seed, "speed": speed}),
                        text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
